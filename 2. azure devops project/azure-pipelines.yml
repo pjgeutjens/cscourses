@@ -1,0 +1,122 @@
+# .NET Core Function App to Windows on Azure
+# Build a .NET Core function app and deploy it to Azure as a Windows function App.
+# Add steps that analyze code, save build artifacts, deploy, and more:
+# https://docs.microsoft.com/en-us/azure/devops/pipelines/languages/dotnet-core
+
+trigger:
+- master
+
+variables:
+  vmImageName: 'vs2017-win2016'
+  azureSubscription: 'Visual Studio Professional (c0916c23-1eeb-4623-a719-4ec0343d791c)'
+  resourceGroupName: 'csQADevOps'
+  resourceGroupLocation: 'West Europe'
+  apiManagementName: 'csDevOps'
+  coursesFunctionAppName: ''
+
+stages:
+- stage: Build
+  displayName: Build stage
+
+  jobs:
+  - job: Build
+    displayName: Build
+    pool:
+      vmImage: $(vmImageName)
+
+    steps:
+    - task: DotNetCoreCLI@2
+      displayName: 'Build project'
+      inputs:
+        projects: '**/*.csproj'
+        arguments: '--output publish_output --configuration Release'
+    - task: ArchiveFiles@2
+      displayName: 'Archive AzureFunction Files'
+      inputs:
+        rootFolderOrFile: 'publish_output/'
+        includeRootFolder: false
+        archiveFile: '$(Build.ArtifactStagingDirectory)/src/$(Build.BuildId).zip'
+    - task: CopyFiles@2
+      displayName: 'Copy Files to: ARM'
+      inputs:
+        SourceFolder: IaC/functionapp
+        Contents: '*.json'
+        TargetFolder: '$(build.artifactstagingdirectory)/arm'
+        CleanTargetFolder: true
+    - task: CopyFiles@2
+      displayName: 'Copy Files to: Scripts'
+      inputs:
+        SourceFolder: Scripts
+        Contents: '*.ps1'
+        TargetFolder: '$(build.artifactstagingdirectory)/scripts'
+
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish Artifact: src'
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)/src'
+        ArtifactName: src
+
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish Artifact: arm'
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)/arm'
+        ArtifactName: arm
+
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish Artifact: scripts'
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)/scripts'
+        ArtifactName: scripts
+
+- stage: Deploy
+  displayName: Deploy stage
+  dependsOn: Build
+  condition: succeeded()
+
+  jobs:
+  - deployment: Deploy
+    displayName: Deploy
+    environment: 'development'
+    pool:
+      vmImage: $(vmImageName)
+
+    strategy:
+      runOnce:
+        deploy:
+
+          steps:
+          - task: CmdLine@2
+            inputs:
+              script: |
+                echo Pipeline.Workspace.arm
+                ls $(Pipeline.Workspace)/arm
+          - task: CmdLine@2
+            inputs:
+              script: |
+                echo System.DefaultWorkingDirectory
+                ls $(System.DefaultWorkingDirectory)
+                cat $(Pipeline.Workspace)/arm/azuredeploy.json
+          - task: AzureResourceGroupDeployment@2
+            displayName: 'Azure Deployment on $(resourceGroupName)'
+            inputs:
+              azureSubscription: '$(azureSubscription)'
+              resourceGroupName: '$(resourceGroupName)'
+              location: '$(resourceGroupLocation)'
+              csmFile: '$(Pipeline.Workspace)/arm/azuredeploy.json'
+              csmParametersFile: '$(Pipeline.Workspace)/arm/azuredeploy.parameters.json'
+              deploymentName: 'csQA-ARM'
+              deploymentOutputs: deploymentOutputs
+          - task: PowerShell@2
+            displayName: 'Parse ARM Deployment outputs'
+            inputs:
+              targetType: filePath
+              filePath: '$(Pipeline.Workspace)/scripts/parse_arm_deployment_output.ps1'
+              arguments: '-ArmOutputString ''$(deploymentOutputs)'' -ErrorAction Stop'
+          - task: AzureFunctionApp@1
+            displayName: 'Azure Function App Deploy: $(coursesFunctionAppName)'
+            inputs:
+              azureSubscription: '$(azureSubscription)'
+              appType: functionApp
+              appName: '$(coursesFunctionAppName)'
+              package: '$(Pipeline.Workspace)/src/**/*.zip'
+              deploymentMethod: zipDeploy

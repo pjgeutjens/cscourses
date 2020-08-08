@@ -1,0 +1,29 @@
+
+
+# create resource groups
+
+az group create -n csCourses-dev-001 -l westeurope
+az group create -n csCourses-uat-001 -l westeurope
+az group create -n csCourses-ppe-001 -l westeurope
+az group create -n csCourses-prd-001 -l westeurope
+
+
+# create dev storage account
+
+az storage account create -n stcscoursesdev001 -g csCourses-dev-001 -l westeurope --sku Standard_LRS
+
+# get the access key for the storage account
+
+az storage account keys list --account-name stcscoursesdev001
+
+# create table storage "courses"
+
+az storage table create --name courses --account-name stcscoursesdev001 --account-key <KEY>
+
+### Powershell: enable static website hosting on storage account
+
+Get-AzStorageAccount -Name stcscoursesdev001 -ResourceGroupName csCourses-dev-001 | Enable-AzStorageStaticWebsite -IndexDocument "index.html" -ErrorDocument404Path "404.html"
+
+# get static hosting url
+
+az storage account show -n stcscoursesdev001 -g csCourses-dev-001 --query "primaryEndpoints.web" --output tsv
